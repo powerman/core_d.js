@@ -37,8 +37,22 @@ describe('unicode handling', () => {
       args: ['--test'],
       text
     };
-    const client = net.connect({ port });
-    client.setEncoding('utf8');
+
+    async function tryConnect(attempts = 5, delay = 100) {
+      for (let i = 0; i < attempts; i++) {
+        try {
+          const client = net.connect({ port });
+          client.setEncoding('utf8');
+          return client;
+        } catch (err) {
+          if (i === attempts - 1) { throw err; }
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+      return null; // Satisfies consistent-return
+    }
+
+    const client = await tryConnect();
     let response = '';
 
     return new Promise((resolve, reject) => {
