@@ -21,13 +21,34 @@ describe('unicode handling', () => {
     srv = server.start();
     srv.listen(0, '127.0.0.1', () => {
       port = srv.address().port;
-      // Server started
-      done();
+      // Give server a moment to be ready for connections
+      setTimeout(done, 50);
     });
   });
 
-  afterEach(() => {
-    srv.close();
+  afterEach((done) => {
+    if (srv) {
+      // First try to gracefully close
+      srv.close((_err) => {
+        srv = null;
+        // Give extra time for cleanup to prevent hanging processes
+        setTimeout(done, 100);
+      });
+
+      // Force close after timeout if needed
+      const forceTimeout = setTimeout(() => {
+        if (srv) {
+          srv.unref(); // Allow process to exit even if server is still running
+          srv = null;
+        }
+      }, 1000);
+
+      srv.on('close', () => {
+        clearTimeout(forceTimeout);
+      });
+    } else {
+      done();
+    }
   });
 
   /*eslint require-await: 0*/
@@ -38,11 +59,31 @@ describe('unicode handling', () => {
       text
     };
 
-    async function tryConnect(attempts = 5, delay = 100) {
+    async function tryConnect(attempts = 10, delay = 200) {
+      const serverPort = port; // Capture port value to avoid ESLint no-loop-func warning
       for (let i = 0; i < attempts; i++) {
         try {
-          const client = net.connect({ port });
-          client.setEncoding('utf8');
+          const client = await new Promise((resolve, reject) => {
+            const conn = net.connect({ port: serverPort, host: '127.0.0.1' });
+            conn.setEncoding('utf8');
+
+            const timeout = setTimeout(() => {
+              conn.removeAllListeners();
+              conn.destroy();
+              reject(new Error('Connection timeout'));
+            }, 1000);
+
+            conn.on('connect', () => {
+              clearTimeout(timeout);
+              resolve(conn);
+            });
+
+            conn.on('error', (err) => {
+              clearTimeout(timeout);
+              conn.removeAllListeners();
+              reject(err);
+            });
+          });
           return client;
         } catch (err) {
           if (i === attempts - 1) { throw err; }
@@ -56,11 +97,28 @@ describe('unicode handling', () => {
     let response = '';
 
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        client.removeAllListeners(); // Remove all listeners to prevent memory leaks
+        client.destroy();
+        reject(new Error('Request timeout'));
+      }, 4000);
+
       client.on('data', (chunk) => {
         response += chunk;
       });
-      client.on('error', reject);
-      client.on('end', () => resolve(response));
+
+      client.on('error', (err) => {
+        clearTimeout(timeout);
+        client.removeAllListeners();
+        reject(err);
+      });
+
+      client.on('end', () => {
+        clearTimeout(timeout);
+        client.removeAllListeners();
+        resolve(response);
+      });
+
       client.end(`${token} ${JSON.stringify(json)}`);
     });
   }
