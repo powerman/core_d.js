@@ -28,9 +28,23 @@ describe('unicode handling', () => {
 
   afterEach((done) => {
     if (srv) {
-      srv.close(() => {
+      // First try to gracefully close
+      srv.close((_err) => {
         srv = null;
-        done();
+        // Give extra time for cleanup to prevent hanging processes
+        setTimeout(done, 100);
+      });
+
+      // Force close after timeout if needed
+      const forceTimeout = setTimeout(() => {
+        if (srv) {
+          srv.unref(); // Allow process to exit even if server is still running
+          srv = null;
+        }
+      }, 1000);
+
+      srv.on('close', () => {
+        clearTimeout(forceTimeout);
       });
     } else {
       done();
@@ -54,6 +68,7 @@ describe('unicode handling', () => {
             conn.setEncoding('utf8');
 
             const timeout = setTimeout(() => {
+              conn.removeAllListeners();
               conn.destroy();
               reject(new Error('Connection timeout'));
             }, 1000);
@@ -65,6 +80,7 @@ describe('unicode handling', () => {
 
             conn.on('error', (err) => {
               clearTimeout(timeout);
+              conn.removeAllListeners();
               reject(err);
             });
           });
@@ -82,6 +98,7 @@ describe('unicode handling', () => {
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        client.removeAllListeners(); // Remove all listeners to prevent memory leaks
         client.destroy();
         reject(new Error('Request timeout'));
       }, 4000);
@@ -92,11 +109,13 @@ describe('unicode handling', () => {
 
       client.on('error', (err) => {
         clearTimeout(timeout);
+        client.removeAllListeners();
         reject(err);
       });
 
       client.on('end', () => {
         clearTimeout(timeout);
+        client.removeAllListeners();
         resolve(response);
       });
 
